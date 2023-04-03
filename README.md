@@ -14,7 +14,7 @@ The c2 profile has `mythic_c2_container==0.0.23` PyPi package installed and repo
 
 ## How To Install
 
-- `sudo ./mythic-cli install github https://github.com/nick-frischkorn/lark`
+- `sudo ./mythic-cli install github https://github.com/nick-frischkorn/lark_c2`
 
 - `sudo ./mythic-cli install folder /path/to/lark/`
 
