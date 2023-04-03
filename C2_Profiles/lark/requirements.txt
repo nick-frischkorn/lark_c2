@@ -1,0 +1,4 @@
+requests
+requests-toolbelt
+pycryptodome
+Flask==2.0.2

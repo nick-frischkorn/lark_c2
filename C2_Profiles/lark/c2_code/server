@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+import requests
+from sanic import Sanic
+from sanic import response
+from requests_toolbelt import MultipartEncoder
+
+config = {}
+base_url = "https://open.feishu.cn/open-apis/"
+
+# Lark API functions
+
+def get_tenant_access_token(base_url, app_id, app_secret):
+    url = base_url + "auth/v3/tenant_access_token/internal"
+    headers = {
+        "Content-Type" : "application/json"
+    }
+    req_body = {
+        "app_id": app_id,
+        "app_secret": app_secret
+    }
+    data = bytes(json.dumps(req_body), encoding='utf8')
+    req = requests.post(url=url, data=data, headers=headers)
+    rsp_dict = req.json()
+    return rsp_dict.get("tenant_access_token")
+
+
+def get_file_content(base_url, token, file_token):
+    url = base_url + "drive/v1/files/" + file_token + "/download"
+    headers = {
+        "Authorization": "Bearer " + token
+    }
+    r = requests.get(url=url, headers=headers, stream=True)
+    if r.status_code == 200:
+        return r.content.decode()
+    else:
+        print("Error downloading file with token {}, status code: {}".format(file_token, r.status_code))
+        return ""
+        
+def get_message_content(base_url, token, msg_id):
+    url = base_url + "im/v1/messages/" + msg_id
+    headers = {
+        "Authorization": "Bearer " + token
+    }
+    r = requests.get(url=url, headers=headers)
+    if r.status_code == 200:
+        raw_content = r.json().get('data').get('items')[0].get('body').get('content')
+        content = json.loads(raw_content).get('elements')[1][0].get('text')
+        return content
+    else:
+        print("Error getting content of message {}, status code: {}".format(msg_id, r.status_code))
+        return ""
+
+def create_card_data(body, title):
+    message = {
+        "config": {
+            "wide_screen_mode": True,
+            "update_multi": True
+        },
+        "elements": [
+            {
+                "tag": "hr"
+            },
+            {
+                "tag": "div",
+                "text": {
+                    "content": body,
+                    "tag": "lark_md"
+                }
+            },
+            {
+                "tag": "hr"
+            }
+        ],
+        "header": {
+            "template": "blue",
+            "title": {
+                "content": title,
+                "tag": "plain_text"
+            }
+        }
+    }
+    json_message = json.dumps(message)
+    return json_message
+
+def update_message_card(base_url, token, message_id, card_data):
+    url = base_url + "im/v1/messages/" + message_id
+    headers = {
+        "Authorization": "Bearer " + token,
+        'Content-Type': "application/json",
+    }
+    req_body = {
+        'content': card_data
+    }
+    payload = json.dumps(req_body)
+    r = requests.patch(url=url, headers=headers, data=payload)
+    if r.status_code == 200:
+        return True
+    else:
+        print("Error updating message card with msg_id {}, status code: {}".format(message_id, r.status_code))
+        return False
+    
+def get_root_folder_id(base_url, token):
+    url = base_url + "drive/explorer/v2/root_folder/meta"
+    headers = {
+        "Authorization": "Bearer " + token
+    }
+    r = requests.get(url=url, headers=headers)
+    if r.status_code == 200:
+        fold_token = r.json().get('data').get('token')
+        return fold_token
+    else:
+        print("Error getting root folder id, status code: {}".format(r.status_code))
+        return ""
+
+def upload_file(base_url, token, content, folder_token):
+    url = base_url + "drive/v1/files/upload_all"
+
+    if type(content) is not bytes:
+        data = bytes(content, 'utf-8')
+    else:
+        data = content
+
+    form = {
+        'file_name': 'file.txt',
+        'parent_type': 'explorer',
+        'parent_node': folder_token,
+        'size': str(len(data)),
+        'file': data
+    }
+    multi_form = MultipartEncoder(form)
+    headers = {
+        "Authorization": "Bearer " + token,
+        'Content-Type': multi_form.content_type,
+    }
+    r = requests.post(url=url, headers=headers, data=multi_form)
+    if r.status_code == 200:
+        fi_token = r.json().get('data').get('file_token')
+        return fi_token
+    else:
+        print("Error uploading file to feishu, status code: {}".format(r.status_code))
+        return ""
+    
+def delete_file(base_url, token, file_id):
+    url = base_url + "drive/v1/files/" + file_id
+    headers = {
+        "Authorization": "Bearer " + token
+    }
+    params = {
+        "type": "file"
+    }
+    r = requests.delete(url=url, headers=headers, params=params)
+    if r.status_code == 200:
+        return True
+    else:
+        print("Error deleting file with id {}, status code: {}".format(file_id, r.status_code))
+
+# Sanic functions
+
+def handle_request_url_verify(challenge):
+    data = {'challenge': challenge}
+    return response.json(data)
+
+def server_redirect(request, exception):
+    return response.redirect('https://www.google.com')
+
+def handle_message(request, **kwargs):
+    global config
+    
+    try:
+        data = request.json
+
+        if data.get('type', '') == "url_verification" and data.get('token', '') == config["lark_verification_token"]:
+            return handle_request_url_verify(data.get('challenge'))
+        
+        elif data.get('header', '').get('event_type', '') == "im.message.reaction.created_v1" and data.get('header', '').get('token', '') == config['lark_verification_token']:
+            message_id = data.get('event', '').get('message_id', '')
+            reaction_type = data.get('event', '').get('reaction_type', '').get('emoji_type', '')
+            
+            if reaction_type == "GLANCE":
+                token = get_tenant_access_token(base_url, config["lark_app_id"], config["lark_app_secret"])
+                file_id = get_message_content(base_url, token, message_id)
+                msg_content = get_file_content(base_url, token, file_id)
+
+                r = requests.post(url=config["mythic_address"], data=msg_content, headers={"Mythic": "lark"})
+                if r.status_code == 200:
+                    folder_id = get_root_folder_id(base_url, token)
+                    new_file_id = upload_file(base_url, token, r.content.decode(), folder_id)
+                    message_card = create_card_data(new_file_id, "TASK")
+                    update_message_card(base_url, token, message_id, message_card)
+                    delete_file(base_url, token, file_id)
+                else:
+                    print("Error sending POST to mythic: {}".format(r.text))
+
+            elif reaction_type == "SMILE":
+                token = get_tenant_access_token(base_url, config["lark_app_id"], config["lark_app_secret"])
+                file_id = get_message_content(base_url, token, message_id)
+                delete_file(base_url, token, file_id)
+        else:
+            raise Exception("")
+
+    except Exception as e:
+        return server_redirect(request, e)
+    
+
+if __name__ == "__main__":
+    sys.path.append("/Mythic/mythic")
+    config_file = open("config.json", 'rb')
+    main_config = json.loads(config_file.read().decode('utf-8'))
+    try:
+        config['mythic_address'] = os.environ['MYTHIC_ADDRESS']
+        config['lark_groupchat_name'] = main_config['lark_groupchat_name']
+        config['lark_app_id'] = main_config['lark_app_id']
+        config['lark_app_secret'] = main_config['lark_app_secret']
+        config['lark_verification_token'] = main_config['lark_verification_token']
+        config['lark_encrypt_key'] = main_config['lark_encrypt_key']
+        config['port'] = main_config['port']
+    except Exception as e:
+        print(e)
+        sys.exit(1)
+    app = Sanic(str(config['port']))
+    app.add_route(handle_message, "/", methods=['POST'])
+    app.error_handler.add(Exception, server_redirect)
+    server = app.run(host="0.0.0.0", port=int(config['port']), debug=False, access_log=False, workers=2)
