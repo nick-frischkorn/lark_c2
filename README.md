@@ -9,6 +9,8 @@ This is a Mythic C2 Profile called lark. It provides a way for agents to communi
 * Kill Dates
 * Sleep Intervals
 * Message Encryption
+* File Uploads Any Size
+* File Downloads <11 MB
 
 The c2 profile has `mythic_c2_container==0.0.23` PyPi package installed and reports to Mythic as version "4". 
 
@@ -142,5 +144,4 @@ Browse to C2 Profiles, then click on the dropdown arrow next to `Start Profile`,
 
 - Upgrade server to be async + support HTTPS
 - Add Lark event encryption option
-- Add agent file upload/download capabilities
 - Add command to switch to regular HTTP beaconing
